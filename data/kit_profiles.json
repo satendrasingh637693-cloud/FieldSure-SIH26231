@@ -1,0 +1,131 @@
+[
+  {
+    "kit_id": "DEMO-001",
+    "name": "Generic Demonstration Colorimetric Kit",
+    "version": "1.0-demo",
+    "mode": "DEMO",
+    "ref_rgb": [
+      [
+        220,
+        80,
+        80
+      ],
+      [
+        80,
+        180,
+        80
+      ],
+      [
+        80,
+        80,
+        220
+      ]
+    ],
+    "positive_lab": [
+      137.0,
+      150.0,
+      147.0
+    ],
+    "negative_lab": [
+      155.0,
+      130.0,
+      122.0
+    ],
+    "inconclusive_lab": [
+      147.0,
+      130.0,
+      134.0
+    ],
+    "decision_margin": 6.0,
+    "max_distance": 35.0,
+    "negative_chroma_max": 7.0,
+    "positive_chroma_min": 25.0,
+    "description": "Synthetic demonstration profile. Thresholds are illustrative and are not valid for a real forensic kit."
+  },
+  {
+    "kit_id": "DEMO-002",
+    "name": "Generic Warm-Response Demonstration Kit",
+    "version": "1.0-demo",
+    "mode": "DEMO",
+    "ref_rgb": [
+      [
+        230,
+        95,
+        85
+      ],
+      [
+        90,
+        175,
+        95
+      ],
+      [
+        95,
+        90,
+        225
+      ]
+    ],
+    "positive_lab": [
+      137.0,
+      147.0,
+      143.0
+    ],
+    "negative_lab": [
+      154.0,
+      132.0,
+      124.0
+    ],
+    "inconclusive_lab": [
+      147.0,
+      132.0,
+      135.0
+    ],
+    "decision_margin": 6.0,
+    "max_distance": 36.0,
+    "negative_chroma_max": 8.0,
+    "positive_chroma_min": 27.0,
+    "description": "Second configurable demo profile illustrating versioned kit-specific parameters."
+  },
+  {
+    "kit_id": "DEMO-003",
+    "name": "Generic Cool-Response Demonstration Kit",
+    "version": "1.0-demo",
+    "mode": "DEMO",
+    "ref_rgb": [
+      [
+        215,
+        85,
+        100
+      ],
+      [
+        75,
+        175,
+        85
+      ],
+      [
+        75,
+        85,
+        215
+      ]
+    ],
+    "positive_lab": [
+      136.0,
+      148.0,
+      146.0
+    ],
+    "negative_lab": [
+      156.0,
+      129.0,
+      121.0
+    ],
+    "inconclusive_lab": [
+      148.0,
+      131.0,
+      134.0
+    ],
+    "decision_margin": 6.0,
+    "max_distance": 36.0,
+    "negative_chroma_max": 7.5,
+    "positive_chroma_min": 26.0,
+    "description": "Third configurable demo profile illustrating profile-specific calibration boundaries."
+  }
+]

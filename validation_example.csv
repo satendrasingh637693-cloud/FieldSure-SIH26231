@@ -1,0 +1,7 @@
+sample_id,batch_id,split,kit_id,true_label,predicted_label,confidence,reference_source
+S001,B001,development,DEMO-001,NEGATIVE,NEGATIVE,0.94,synthetic_demo
+S002,B002,development,DEMO-001,POSITIVE,POSITIVE,0.91,synthetic_demo
+S003,B003,development,DEMO-001,INCONCLUSIVE,INCONCLUSIVE,0.72,synthetic_demo
+S004,B004,held_out,DEMO-001,NEGATIVE,NEGATIVE,0.89,synthetic_demo
+S005,B005,held_out,DEMO-001,POSITIVE,POSITIVE,0.88,synthetic_demo
+S006,B006,held_out,DEMO-001,INCONCLUSIVE,INCONCLUSIVE,0.67,synthetic_demo

@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+data/*.db
+keys/operators/*
+*.key
+*.pem
+*.p12
+.streamlit/secrets.toml
+release/
+*.zip
