@@ -22,3 +22,16 @@
 - Protect encrypted private keys and operator credentials.
 - Do not treat DEMO profiles or synthetic images as operational validation.
 - Verify evidence bundles independently before relying on them.
+
+## Supabase-backed connected deployment
+
+For the connected prototype, configure Streamlit secrets with:
+
+```toml
+SUPABASE_URL = "<project-url>"
+SUPABASE_SECRET_KEY = "<secret-key>"
+```
+
+Use the private `fieldsure-evidence` storage bucket for test images and operator key material. Do not commit the secrets file, service key, private keys or operational database.
+
+Before a release, verify the complete path: login -> New Test -> remote database/storage -> History -> Verify Record -> evidence bundle.

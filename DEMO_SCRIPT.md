@@ -14,7 +14,7 @@ Capture or upload the synthetic demo card. Show reference-card PASS, test-region
 
 ## 4. Secure evidence
 
-Point out SHA-256 image hash, record hash, operator-specific signature key fingerprint and local audit chain.
+Point out SHA-256 image hash, record hash, operator-specific signature key fingerprint and the Supabase-backed chained audit record.
 
 ## 5. Verify
 
