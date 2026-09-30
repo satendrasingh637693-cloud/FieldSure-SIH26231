@@ -1,4 +1,5 @@
 from __future__ import annotations
+from supabase_client import get_supabase, supabase_enabled
 
 import base64
 import hashlib
