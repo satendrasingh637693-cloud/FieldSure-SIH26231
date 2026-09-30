@@ -10,6 +10,9 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from supabase_client import supabase_enabled
+from supabase_repository import download_operator_public_key, download_test_image
+
 from core import (
     PROFILES,
     authenticate_operator,
@@ -24,6 +27,7 @@ from core import (
     list_tests,
     public_key_fingerprint,
     operator_public_path,
+    simulate_tamper,
     verify_test,
 )
 from validation import validate_dataframe, report_as_dict
@@ -38,14 +42,31 @@ def evidence_bundle_bytes(record: dict, analysis: dict) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
         evidence = {**record, "analysis": analysis}
-        z.writestr(f"{record['test_id']}_evidence.json", json.dumps(evidence, indent=2, ensure_ascii=False))
-        image_path = Path(record["image_path"])
-        if image_path.exists():
-            z.write(image_path, arcname=f"{record['test_id']}_captured.jpg")
-        op_id = record.get("signature_key_id") or record.get("operator_id")
-        public_key_path = operator_public_path(str(op_id))
+        z.writestr(
+            f"{record['test_id']}_evidence.json",
+            json.dumps(evidence, indent=2, ensure_ascii=False),
+        )
+
+        image_path_value = str(record["image_path"])
+        image_bytes = b""
+        if supabase_enabled() and image_path_value.startswith("tests/"):
+            image_bytes = download_test_image(image_path_value)
+        else:
+            image_path = Path(image_path_value)
+            if image_path.exists():
+                image_bytes = image_path.read_bytes()
+        if image_bytes:
+            z.writestr(f"{record['test_id']}_captured.jpg", image_bytes)
+
+        op_id = str(record.get("signature_key_id") or record.get("operator_id"))
+        public_key_path = operator_public_path(op_id)
+        public_key_bytes = b""
         if public_key_path.exists():
-            z.write(public_key_path, arcname="operator_public_key.pem")
+            public_key_bytes = public_key_path.read_bytes()
+        elif supabase_enabled():
+            public_key_bytes = download_operator_public_key(op_id)
+        if public_key_bytes:
+            z.writestr("operator_public_key.pem", public_key_bytes)
     return buf.getvalue()
 
 
@@ -116,8 +137,12 @@ with st.sidebar:
         logout()
         st.rerun()
     st.divider()
-    st.caption("Storage: local SQLite + local images")
-    st.caption("No cloud service is required during runtime after dependencies are staged.")
+    if supabase_enabled():
+        st.caption("Storage: Supabase DB + private evidence storage")
+        st.caption("Remote persistence is enabled for records and evidence.")
+    else:
+        st.caption("Storage: local SQLite + local evidence files")
+        st.caption("Supabase is not configured; local fallback is active.")
 
 pages = ["New Test", "History", "Verify Record", "Validation"]
 if role == "ADMIN":
@@ -263,46 +288,166 @@ elif page == "History":
         st.info("No test records found for this view.")
 
 # --------------------------- Verify ---------------------------
+# --------------------------- Verify ---------------------------
 elif page == "Verify Record":
     st.subheader("Cryptographic Record Verification")
+
     scope_operator = None if role == "ADMIN" else operator_id
     rows = list_tests(operator_id=scope_operator)
     ids = [r["test_id"] for r in rows]
+
     if not ids:
         st.info("No test records available for verification.")
     else:
         default_id = st.session_state.get("last_test_id", ids[0])
         default_index = ids.index(default_id) if default_id in ids else 0
-        tid = st.selectbox("Select Test ID", ids, index=default_index)
-        if st.button("Verify Record", type="primary"):
+
+        tid = st.selectbox(
+            "Select Test ID",
+            ids,
+            index=default_index,
+        )
+
+        verify_key = f"verify_result_{tid}"
+        evidence_key = f"verify_evidence_{tid}"
+        tamper_key = f"tamper_sim_{tid}"
+
+        if st.button(
+            "Verify Record",
+            type="primary",
+        ):
             result = verify_test(tid)
-            st.metric("Overall status", "VALID ✅" if result["all_ok"] else "TAMPERING / INTEGRITY FAILURE ❌")
-            checks = pd.DataFrame([
-                ["Original image exists", result["image_exists"]],
-                ["Image SHA-256 matches", result["image_hash_ok"]],
-                ["Record hash matches", result["record_hash_ok"]],
-                ["Ed25519 signature valid", result["signature_ok"]],
-                ["Audit hash chain valid", result["audit_chain_ok"]],
-            ], columns=["Check", "Status"])
-            checks["Status"] = checks["Status"].map({True: "PASS ✅", False: "FAIL ❌"})
-            st.dataframe(checks, use_container_width=True, hide_index=True)
-            if result["all_ok"]:
-                st.success("The current image, protected record and audit chain are consistent with the stored cryptographic evidence.")
-            else:
-                st.error("At least one protected value no longer matches its original cryptographic evidence. The record requires investigation.")
-                if result.get("chain_failure_at"):
-                    st.caption(f"First audit-chain inconsistency detected at: {result['chain_failure_at']}")
+            st.session_state[verify_key] = result
+
             row = get_test(tid)
-            if row:
-                evidence = dict(row)
+            st.session_state[evidence_key] = dict(row) if row else None
+
+            st.session_state.pop(tamper_key, None)
+
+        result = st.session_state.get(verify_key)
+        evidence = st.session_state.get(evidence_key)
+
+        if result is not None:
+            st.metric(
+                "Overall status",
+                "VALID ✅"
+                if result["all_ok"]
+                else "TAMPERING / INTEGRITY FAILURE ❌",
+            )
+
+            checks = pd.DataFrame(
+                [
+                    ["Original image exists", result["image_exists"]],
+                    ["Image SHA-256 matches", result["image_hash_ok"]],
+                    ["Record hash matches", result["record_hash_ok"]],
+                    ["Ed25519 signature valid", result["signature_ok"]],
+                    ["Audit hash chain valid", result["audit_chain_ok"]],
+                ],
+                columns=["Check", "Status"],
+            )
+
+            checks["Status"] = checks["Status"].map(
+                {
+                    True: "PASS ✅",
+                    False: "FAIL ❌",
+                }
+            )
+
+            st.dataframe(
+                checks,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            if result["all_ok"]:
+                st.success(
+                    "The current image, protected record and audit chain "
+                    "are consistent with the stored cryptographic evidence."
+                )
+            else:
+                st.error(
+                    "At least one protected value no longer matches its "
+                    "original cryptographic evidence. The record requires investigation."
+                )
+
+                if result.get("chain_failure_at"):
+                    st.caption(
+                        f"First audit-chain inconsistency detected at: "
+                        f"{result['chain_failure_at']}"
+                    )
+
+            if evidence is not None:
                 st.download_button(
                     "Download stored record (JSON)",
-                    data=json.dumps(evidence, indent=2, ensure_ascii=False),
+                    data=json.dumps(
+                        evidence,
+                        indent=2,
+                        ensure_ascii=False,
+                    ),
                     file_name=f"{tid}_stored_record.json",
                     mime="application/json",
                 )
+
                 st.json(evidence)
 
+                with st.expander(
+                    "Controlled tamper simulation "
+                    "(does not modify stored data)"
+                ):
+                    st.caption(
+                        "For demonstration only: this changes the result "
+                        "in memory and checks the original cryptographic "
+                        "evidence. The Supabase record is not edited."
+                    )
+
+                    if st.button(
+                        "Simulate result tampering",
+                        key=f"simulate-{tid}",
+                    ):
+                        st.session_state[tamper_key] = simulate_tamper(
+                            evidence
+                        )
+
+                    sim = st.session_state.get(tamper_key)
+
+                    if sim is not None:
+                        st.error(
+                            f"SIMULATED TAMPERING: "
+                            f"{sim['original_result']} -> "
+                            f"{sim['tampered_result']}"
+                        )
+
+                        sim_checks = pd.DataFrame(
+                            [
+                                [
+                                    "Record hash still matches",
+                                    sim["record_hash_matches"],
+                                ],
+                                [
+                                    "Original Ed25519 signature still validates",
+                                    sim["signature_valid"],
+                                ],
+                            ],
+                            columns=["Check", "Status"],
+                        )
+
+                        sim_checks["Status"] = sim_checks["Status"].map(
+                            {
+                                True: "PASS ✅",
+                                False: "FAIL ❌",
+                            }
+                        )
+
+                        st.dataframe(
+                            sim_checks,
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                        st.caption(
+                            "No stored database row or evidence image "
+                            "was modified by this simulation."
+                        )
 # --------------------------- Validation ---------------------------
 elif page == "Validation":
     st.subheader("Validation & Data-Quality Workflow")

@@ -30,6 +30,14 @@ def save_test_record(record: dict[str, Any]) -> None:
         raise RuntimeError("Supabase is not configured")
 
     row = {column: record.get(column) for column in TEST_COLUMNS}
+    row["confidence"] = round(float(record.get("confidence", 0.0)), 6)
+    row["reference_card_ok"] = int(bool(record.get("reference_card_ok")))
+    if row["latitude"] is not None:
+        row["latitude"] = float(row["latitude"])
+    if row["longitude"] is not None:
+        row["longitude"] = float(row["longitude"])
+    if row["location_accuracy"] is not None:
+        row["location_accuracy"] = float(row["location_accuracy"])
 
     db.table("tests").upsert(
         row,
@@ -120,6 +128,11 @@ def save_operator(operator: dict[str, Any]) -> None:
         row,
         on_conflict="operator_id",
     ).execute()
+
+
+def update_operator(operator: dict[str, Any]) -> None:
+    """Persist the supplied operator record to the remote operator directory."""
+    save_operator(operator)
 
 
 def get_operator(operator_id: str) -> dict[str, Any] | None:
@@ -225,3 +238,57 @@ def delete_operator_keys(operator_id: str) -> None:
     db.storage.from_(EVIDENCE_BUCKET).remove(
         [private_path, public_path]
     )
+
+def latest_test_record_hash() -> str:
+    db = get_supabase()
+    if db is None:
+        return "GENESIS"
+
+    response = (
+        db.table("tests")
+        .select("record_hash")
+        .order("timestamp", desc=True)
+        .order("test_id", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    return response.data[0]["record_hash"] if response.data else "GENESIS"
+
+
+def list_test_records(
+    search: str = "",
+    operator_id: str | None = None,
+) -> list[dict[str, Any]]:
+    db = get_supabase()
+    if db is None:
+        return []
+
+    response = (
+        db.table("tests")
+        .select("*")
+        .order("timestamp", desc=True)
+        .order("test_id", desc=True)
+        .execute()
+    )
+
+    rows = response.data or []
+
+    if operator_id:
+        rows = [
+            row for row in rows
+            if row.get("operator_id") == operator_id
+        ]
+
+    if search:
+        search_lower = search.lower()
+        rows = [
+            row
+            for row in rows
+            if any(
+                search_lower in str(row.get(field, "")).lower()
+                for field in ("test_id", "operator_id", "result", "kit_id")
+            )
+        ]
+
+    return rows

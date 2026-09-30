@@ -2,7 +2,7 @@
 
 ## Core flow
 
-Operator authentication -> camera/upload -> reference-card detection -> colour calibration -> test-region detection -> kit-profile classification -> evidence record -> SHA-256 image hash -> operator-specific Ed25519 signature -> SQLite storage + chained audit hash -> verification.
+Operator authentication -> camera/upload -> reference-card detection -> colour calibration -> test-region detection -> kit-profile classification -> evidence record -> SHA-256 image hash -> operator-specific Ed25519 signature -> Supabase DB + private evidence storage (with SQLite/local-file fallback) -> chained audit hash -> verification.
 
 ## Modules
 
@@ -10,8 +10,10 @@ Operator authentication -> camera/upload -> reference-card detection -> colour c
 - `core.py`: computer-vision pipeline, profile loading, authentication, key management, record creation and verification.
 - `validation.py`: dataset checks, leakage screening, confusion matrix, per-class metrics and Wilson intervals.
 - `data/kit_profiles.json`: versioned kit/profile definitions for the configurable prototype.
-- `data/field_tests.db`: local SQLite store.
-- `keys/operators/`: separate public keys and encrypted private keys per operator.
+- `data/field_tests.db`: local SQLite fallback store.
+- Supabase `tests` table: remote test metadata when configured.
+- Supabase `fieldsure-evidence` bucket: private evidence images and operator key material when configured.
+- `keys/operators/`: local cache of separate public keys and encrypted private keys per operator.
 
 ## Security model
 

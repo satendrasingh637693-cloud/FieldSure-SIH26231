@@ -21,7 +21,7 @@ FieldSure is a software-only prototype companion for existing colorimetric field
 - Canonical record hashing
 - Digital signature verification
 - Tamper-evident chained audit verification
-- Searchable local test history
+- Searchable test history via Supabase when configured, with local SQLite fallback
 - Evidence JSON and ZIP bundle export
 - Validation workflow with data-quality and batch-leakage screening
 - Confusion matrix, sensitivity, specificity, PPV, NPV, F1 and Wilson intervals
@@ -100,6 +100,10 @@ Recommended columns:
 - `reference_source`
 
 The validator flags invalid labels, duplicate sample IDs, invalid confidence values and possible batch leakage across splits. It produces a confusion matrix, per-class metrics and descriptive Wilson 95% intervals.
+
+## Supabase persistence
+
+When `SUPABASE_URL` and `SUPABASE_SECRET_KEY` are configured through Streamlit secrets, test metadata is persisted in the `tests` table and evidence images are stored in the private `fieldsure-evidence` bucket. Operator authentication uses the remote `operators` table first and falls back to SQLite when the remote service is unavailable. Secrets and private keys must never be committed to source control.
 
 ## Offline deployment
 

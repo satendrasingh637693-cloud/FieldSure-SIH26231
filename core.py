@@ -5,7 +5,16 @@ from supabase_repository import (
     download_operator_private_key,
     download_operator_public_key,
     get_operator,
+    save_operator,
     upload_operator_keys,
+    latest_test_record_hash,
+    upload_test_image,
+    save_test_record,
+    get_test_record,
+    download_test_image,
+    delete_test_image,
+    list_test_records,
+    save_operator,
 )
 
 import base64
@@ -280,6 +289,11 @@ def load_private_key(operator_id: str = "LEGACY", password: Optional[str] = None
 
 def load_public_key(operator_id: str = "LEGACY") -> Ed25519PublicKey:
     path = operator_public_path(operator_id) if operator_id != "LEGACY" else PUBLIC_KEY_PATH
+    if not path.exists() and supabase_enabled():
+        try:
+            path.write_bytes(download_operator_public_key(operator_id))
+        except Exception:
+            pass
     if not path.exists():
         raise FileNotFoundError(f"Public key not found for {operator_id}")
     return serialization.load_pem_public_key(path.read_bytes())
@@ -361,16 +375,27 @@ def init_db() -> None:
     finally:
         conn.close()
     seed_default_operators()
-
-
 def seed_default_operators() -> None:
     conn = sqlite3.connect(DB_PATH)
     try:
         count = conn.execute("SELECT COUNT(*) FROM operators").fetchone()[0]
         if count == 0:
-            create_operator("OP-001", "Field Operator", "OPERATOR", "FieldSure@123", conn=conn)
-            create_operator("ADMIN-001", "System Administrator", "ADMIN", "Admin@123", conn=conn)
-        conn.commit()
+            create_operator(
+                "OP-001",
+                "Field Operator",
+                "OPERATOR",
+                "FieldSure@123",
+                conn=conn,
+                persist_remote=False,
+            )
+            create_operator(
+                "ADMIN-001",
+                "System Administrator",
+                "ADMIN",
+                "Admin@123",
+                conn=conn,
+                persist_remote=False,
+            )
     finally:
         conn.close()
 
@@ -382,6 +407,7 @@ def create_operator(
     password: str,
     *,
     conn: Optional[sqlite3.Connection] = None,
+    persist_remote: bool = True,
 ) -> None:
     own = conn is None
     conn = conn or sqlite3.connect(DB_PATH)
@@ -389,12 +415,29 @@ def create_operator(
         salt_b64, hash_b64 = _hash_password(password)
         ensure_operator_keys(operator_id, password)
         fingerprint = sha256_bytes(operator_public_path(operator_id).read_bytes())[:24]
+        created_at = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "INSERT INTO operators(operator_id,display_name,role,password_salt,password_hash,public_key_fingerprint,active,created_at) VALUES (?,?,?,?,?,?,1,?)",
-            (operator_id, display_name, role, salt_b64, hash_b64, fingerprint, datetime.now(timezone.utc).isoformat()),
+            (operator_id, display_name, role, salt_b64, hash_b64, fingerprint, created_at),
         )
         if own:
             conn.commit()
+
+        if supabase_enabled() and persist_remote:
+            save_operator({
+                "operator_id": operator_id,
+                "display_name": display_name,
+                "role": role,
+                "password_salt": salt_b64,
+                "password_hash": hash_b64,
+                "public_key_fingerprint": fingerprint,
+                "active": 1,
+                "created_at": created_at,
+            })
+    except Exception:
+        if own:
+            conn.rollback()
+        raise
     finally:
         if own:
             conn.close()
@@ -445,32 +488,86 @@ def authenticate_operator(operator_id: str, password: str) -> Optional[dict[str,
         conn.close()
 
 
-def change_operator_password(operator_id: str, old_password: str, new_password: str) -> bool:
+def change_operator_password(
+    operator_id: str,
+    old_password: str,
+    new_password: str,
+) -> bool:
     user = authenticate_operator(operator_id, old_password)
+
     if not user:
         return False
-    old_path = operator_private_path(operator_id)
+
     private = load_private_key(operator_id, old_password)
+
     private_bytes = private.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.BestAvailableEncryption(new_password.encode()),
+        encryption_algorithm=serialization.BestAvailableEncryption(
+            new_password.encode()
+        ),
     )
-    old_path.write_bytes(private_bytes)
+
+    public_path = operator_public_path(operator_id)
+    public_bytes = public_path.read_bytes()
+
     salt_b64, hash_b64 = _hash_password(new_password)
+
+    if supabase_enabled():
+        try:
+            remote_operator = dict(user)
+
+            remote_operator["password_salt"] = salt_b64
+            remote_operator["password_hash"] = hash_b64
+
+            save_operator(remote_operator)
+
+            upload_operator_keys(
+                operator_id,
+                private_bytes,
+                public_bytes,
+            )
+        except Exception:
+            return False
+
+    old_path = operator_private_path(operator_id)
+    old_path.write_bytes(private_bytes)
+
     conn = sqlite3.connect(DB_PATH)
     try:
-        conn.execute("UPDATE operators SET password_salt=?, password_hash=? WHERE operator_id=?", (salt_b64, hash_b64, operator_id))
+        conn.execute(
+            """
+            UPDATE operators
+            SET password_salt=?, password_hash=?
+            WHERE operator_id=?
+            """,
+            (
+                salt_b64,
+                hash_b64,
+                operator_id,
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
+
     return True
 
+def list_operators() -> list[dict[str, Any]]:
+    if supabase_enabled():
+        try:
+            from supabase_repository import list_operators_remote
+            return list_operators_remote()
+        except Exception:
+            pass
 
-def list_operators() -> list[sqlite3.Row]:
     conn = get_db_connection()
     try:
-        return conn.execute("SELECT operator_id,display_name,role,active,created_at,public_key_fingerprint FROM operators ORDER BY operator_id").fetchall()
+        rows = conn.execute(
+            "SELECT operator_id,display_name,role,active,created_at,public_key_fingerprint "
+            "FROM operators ORDER BY operator_id"
+        ).fetchall()
+        return [dict(row) for row in rows]
     finally:
         conn.close()
 
@@ -764,7 +861,14 @@ def create_test_record(
     image_hash = sha256_bytes(image_bytes)
     image_path = IMAGE_DIR / f"{test_id}.jpg"
     image_path.write_bytes(image_bytes)
-    previous_hash = latest_record_hash()
+    if supabase_enabled():
+        stored_image_path = upload_test_image(test_id, image_bytes)
+    else:
+        stored_image_path = str(image_path)
+    if supabase_enabled():
+        previous_hash = latest_test_record_hash()
+    else:
+        previous_hash = latest_record_hash()
     unsigned = {
         "test_id": test_id,
         "operator_id": operator_id,
@@ -784,6 +888,7 @@ def create_test_record(
     signed_payload = {**unsigned, "record_hash": record_hash}
     signature = sign_payload(signed_payload, operator_id=operator_id, password=operator_password)
     conn = get_db_connection()
+    remote_image_uploaded = bool(supabase_enabled())
     try:
         conn.execute(
             """
@@ -800,36 +905,86 @@ def create_test_record(
             ),
         )
         conn.commit()
+
+        if supabase_enabled():
+            try:
+                save_test_record({
+                    **signed_payload,
+                    "signature": signature,
+                    "image_path": stored_image_path,
+                    "signature_key_id": operator_id,
+                })
+            except Exception:
+                conn.execute("DELETE FROM tests WHERE test_id = ?", (test_id,))
+                conn.commit()
+                try:
+                    delete_test_image(stored_image_path)
+                except Exception:
+                    pass
+                raise
     finally:
         conn.close()
-    return {**signed_payload, "signature": signature, "image_path": str(image_path), "signature_key_id": operator_id}
+    return {**signed_payload, "signature": signature, "image_path": stored_image_path, "signature_key_id": operator_id}
 
+def list_tests(
+    search: str = "",
+    operator_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    if supabase_enabled():
+        try:
+            return list_test_records(
+                search=search,
+                operator_id=operator_id,
+            )
+        except Exception:
+            pass
 
-def list_tests(search: str = "", operator_id: Optional[str] = None) -> list[sqlite3.Row]:
     conn = get_db_connection()
     try:
         params: list[Any] = []
         where: list[str] = []
+
         if search:
             q = f"%{search}%"
-            where.append("(test_id LIKE ? OR operator_id LIKE ? OR result LIKE ? OR kit_id LIKE ?)")
+            where.append(
+                "(test_id LIKE ? OR operator_id LIKE ? OR result LIKE ? OR kit_id LIKE ?)"
+            )
             params.extend([q, q, q, q])
+
         if operator_id:
             where.append("operator_id = ?")
             params.append(operator_id)
-        sql = "SELECT * FROM tests" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY rowid DESC"
-        return conn.execute(sql, tuple(params)).fetchall()
+
+        sql = (
+            "SELECT * FROM tests"
+            + (" WHERE " + " AND ".join(where) if where else "")
+            + " ORDER BY rowid DESC"
+        )
+
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
     finally:
         conn.close()
 
 
-def get_test(test_id: str) -> Optional[sqlite3.Row]:
+def get_test(test_id: str) -> Optional[dict[str, Any]]:
+    if supabase_enabled():
+        try:
+            remote = get_test_record(test_id)
+            if remote is not None:
+                return remote
+        except Exception:
+            pass
+
     conn = get_db_connection()
     try:
-        return conn.execute("SELECT * FROM tests WHERE test_id = ?", (test_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM tests WHERE test_id = ?",
+            (test_id,),
+        ).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
-
 
 def _record_unsigned(rowd: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -837,7 +992,7 @@ def _record_unsigned(rowd: dict[str, Any]) -> dict[str, Any]:
         "operator_id": rowd["operator_id"],
         "kit_id": rowd["kit_id"],
         "result": rowd["result"],
-        "confidence": rowd["confidence"],
+        "confidence": round(float(rowd["confidence"]), 6),
         "timestamp": rowd["timestamp"],
         "latitude": None if rowd["latitude"] is None else float(rowd["latitude"]),
         "longitude": None if rowd["longitude"] is None else float(rowd["longitude"]),
@@ -849,39 +1004,115 @@ def _record_unsigned(rowd: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def simulate_tamper(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Simulate a protected-field change without modifying stored data."""
+    tampered = dict(record)
+    original_result = str(tampered.get("result", ""))
+    replacement = {"POSITIVE": "NEGATIVE", "NEGATIVE": "POSITIVE", "INCONCLUSIVE": "NEGATIVE"}.get(
+        original_result, "POSITIVE"
+    )
+    tampered["result"] = replacement
+
+    unsigned = _record_unsigned(tampered)
+    recomputed_hash = sha256_bytes(canonical_json(unsigned))
+    stored_hash = str(record["record_hash"])
+    key_id = record.get("signature_key_id") or record.get("operator_id") or "LEGACY"
+    signature_ok = verify_signature(
+        {**unsigned, "record_hash": stored_hash},
+        record["signature"],
+        operator_id=key_id if key_id != "LEGACY" else None,
+    )
+
+    return {
+        "original_result": original_result,
+        "tampered_result": replacement,
+        "record_hash_matches": recomputed_hash == stored_hash,
+        "signature_valid": signature_ok,
+        "tampered_record": tampered,
+    }
+
+
 def verify_test(test_id: str) -> Dict[str, Any]:
     row = get_test(test_id)
+
     if not row:
         return {"found": False}
-    rowd = dict(row)
-    image_path = Path(rowd["image_path"])
-    image_exists = image_path.exists()
-    image_hash_ok = image_exists and sha256_bytes(image_path.read_bytes()) == rowd["image_hash"]
-    unsigned = _record_unsigned(rowd)
-    recomputed_hash = sha256_bytes(canonical_json(unsigned))
-    record_hash_ok = recomputed_hash == rowd["record_hash"]
-    key_id = rowd.get("signature_key_id") or "LEGACY"
-    signature_ok = verify_signature({**unsigned, "record_hash": rowd["record_hash"]}, rowd["signature"], operator_id=key_id if key_id != "LEGACY" else None)
 
-    conn = get_db_connection()
-    try:
-        rows = conn.execute("SELECT * FROM tests ORDER BY rowid ASC").fetchall()
-    finally:
-        conn.close()
-    chain_ok = True
+    rowd = dict(row)
+
+    image_path_value = str(rowd["image_path"])
+
+    if supabase_enabled() and image_path_value.startswith("tests/"):
+        try:
+            image_bytes = download_test_image(image_path_value)
+            image_exists = True
+        except Exception:
+            image_bytes = b""
+            image_exists = False
+    else:
+        image_path = Path(image_path_value)
+        image_exists = image_path.exists()
+        image_bytes = image_path.read_bytes() if image_exists else b""
+
+    image_hash_ok = (
+        image_exists
+        and sha256_bytes(image_bytes) == rowd["image_hash"]
+    )
+
+    unsigned = _record_unsigned(rowd)
+
+    recomputed_hash = sha256_bytes(
+        canonical_json(unsigned)
+    )
+
+    record_hash_ok = (
+        recomputed_hash == rowd["record_hash"]
+    )
+
+    key_id = rowd.get("signature_key_id") or "LEGACY"
+
+    signature_ok = verify_signature(
+        {**unsigned, "record_hash": rowd["record_hash"]},
+        rowd["signature"],
+        operator_id=key_id if key_id != "LEGACY" else None,
+    )
+
+    chain_source_ok = True
+    if supabase_enabled():
+        try:
+            rows = list(reversed(list_test_records()))
+        except Exception:
+            rows = []
+            chain_source_ok = False
+    else:
+        conn = get_db_connection()
+        try:
+            rows = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT * FROM tests ORDER BY rowid ASC"
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
+
+    chain_ok = chain_source_ok
     chain_failure_at = None
     prev = "GENESIS"
-    for r in rows:
-        rd = dict(r)
+
+    for rd in rows:
         if rd["previous_hash"] != prev:
             chain_ok = False
             chain_failure_at = rd["test_id"]
             break
+
         ru = _record_unsigned(rd)
+
         if sha256_bytes(canonical_json(ru)) != rd["record_hash"]:
             chain_ok = False
             chain_failure_at = rd["test_id"]
             break
+
         prev = rd["record_hash"]
 
     return {
@@ -893,10 +1124,16 @@ def verify_test(test_id: str) -> Dict[str, Any]:
         "audit_chain_ok": chain_ok,
         "chain_failure_at": chain_failure_at,
         "signature_key_id": key_id,
-        "all_ok": all([image_hash_ok, record_hash_ok, signature_ok, chain_ok]),
+        "all_ok": all(
+            [
+                image_hash_ok,
+                record_hash_ok,
+                signature_ok,
+                chain_ok,
+            ]
+        ),
         "recomputed_hash": recomputed_hash,
     }
-
 
 def public_key_fingerprint(operator_id: str) -> str:
     path = operator_public_path(operator_id)
