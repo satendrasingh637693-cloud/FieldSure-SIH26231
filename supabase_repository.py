@@ -151,3 +151,77 @@ def list_operators_remote() -> list[dict[str, Any]]:
     )
 
     return response.data or []
+
+def _operator_key_path(operator_id: str, filename: str) -> str:
+    safe_id = (
+        str(operator_id)
+        .strip()
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace("..", "_")
+    )
+    return f"operators/{safe_id}/{filename}"
+
+
+def upload_operator_keys(
+    operator_id: str,
+    private_key_bytes: bytes,
+    public_key_bytes: bytes,
+) -> tuple[str, str]:
+    db = get_supabase()
+    if db is None:
+        raise RuntimeError("Supabase is not configured")
+
+    private_path = _operator_key_path(operator_id, "private_key.pem")
+    public_path = _operator_key_path(operator_id, "public_key.pem")
+
+    db.storage.from_(EVIDENCE_BUCKET).upload(
+        private_path,
+        private_key_bytes,
+        file_options={
+            "content-type": "application/x-pem-file",
+            "upsert": "true",
+        },
+    )
+
+    db.storage.from_(EVIDENCE_BUCKET).upload(
+        public_path,
+        public_key_bytes,
+        file_options={
+            "content-type": "application/x-pem-file",
+            "upsert": "true",
+        },
+    )
+
+    return private_path, public_path
+
+
+def download_operator_private_key(operator_id: str) -> bytes:
+    db = get_supabase()
+    if db is None:
+        raise RuntimeError("Supabase is not configured")
+
+    path = _operator_key_path(operator_id, "private_key.pem")
+    return db.storage.from_(EVIDENCE_BUCKET).download(path)
+
+
+def download_operator_public_key(operator_id: str) -> bytes:
+    db = get_supabase()
+    if db is None:
+        raise RuntimeError("Supabase is not configured")
+
+    path = _operator_key_path(operator_id, "public_key.pem")
+    return db.storage.from_(EVIDENCE_BUCKET).download(path)
+
+
+def delete_operator_keys(operator_id: str) -> None:
+    db = get_supabase()
+    if db is None:
+        raise RuntimeError("Supabase is not configured")
+
+    private_path = _operator_key_path(operator_id, "private_key.pem")
+    public_path = _operator_key_path(operator_id, "public_key.pem")
+
+    db.storage.from_(EVIDENCE_BUCKET).remove(
+        [private_path, public_path]
+    )
