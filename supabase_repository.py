@@ -59,3 +59,40 @@ def get_test_record(test_id: str) -> dict[str, Any] | None:
     )
 
     return response.data[0] if response.data else None
+
+EVIDENCE_BUCKET = "fieldsure-evidence"
+
+
+def upload_test_image(test_id: str, image_bytes: bytes) -> str:
+    db = get_supabase()
+    if db is None:
+        raise RuntimeError("Supabase is not configured")
+
+    path = f"tests/{test_id}.jpg"
+
+    db.storage.from_(EVIDENCE_BUCKET).upload(
+        path,
+        image_bytes,
+        file_options={
+            "content-type": "image/jpeg",
+            "upsert": "true",
+        },
+    )
+
+    return path
+
+
+def download_test_image(storage_path: str) -> bytes:
+    db = get_supabase()
+    if db is None:
+        raise RuntimeError("Supabase is not configured")
+
+    return db.storage.from_(EVIDENCE_BUCKET).download(storage_path)
+
+
+def delete_test_image(storage_path: str) -> None:
+    db = get_supabase()
+    if db is None:
+        raise RuntimeError("Supabase is not configured")
+
+    db.storage.from_(EVIDENCE_BUCKET).remove([storage_path])
