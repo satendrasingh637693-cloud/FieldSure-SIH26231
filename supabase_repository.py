@@ -96,3 +96,58 @@ def delete_test_image(storage_path: str) -> None:
         raise RuntimeError("Supabase is not configured")
 
     db.storage.from_(EVIDENCE_BUCKET).remove([storage_path])
+
+OPERATOR_COLUMNS = [
+    "operator_id",
+    "display_name",
+    "role",
+    "password_salt",
+    "password_hash",
+    "public_key_fingerprint",
+    "active",
+    "created_at",
+]
+
+
+def save_operator(operator: dict[str, Any]) -> None:
+    db = get_supabase()
+    if db is None:
+        raise RuntimeError("Supabase is not configured")
+
+    row = {column: operator.get(column) for column in OPERATOR_COLUMNS}
+
+    db.table("operators").upsert(
+        row,
+        on_conflict="operator_id",
+    ).execute()
+
+
+def get_operator(operator_id: str) -> dict[str, Any] | None:
+    db = get_supabase()
+    if db is None:
+        return None
+
+    response = (
+        db.table("operators")
+        .select("*")
+        .eq("operator_id", operator_id)
+        .limit(1)
+        .execute()
+    )
+
+    return response.data[0] if response.data else None
+
+
+def list_operators_remote() -> list[dict[str, Any]]:
+    db = get_supabase()
+    if db is None:
+        return []
+
+    response = (
+        db.table("operators")
+        .select("*")
+        .order("operator_id")
+        .execute()
+    )
+
+    return response.data or []
