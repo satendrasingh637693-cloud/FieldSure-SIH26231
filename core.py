@@ -4,6 +4,7 @@ from supabase_client import get_supabase, supabase_enabled
 from supabase_repository import (
     download_operator_private_key,
     download_operator_public_key,
+    get_operator,
     upload_operator_keys,
 )
 
@@ -400,13 +401,44 @@ def create_operator(
 
 
 def authenticate_operator(operator_id: str, password: str) -> Optional[dict[str, Any]]:
+    operator_id = operator_id.strip()
+
+    if supabase_enabled():
+        try:
+            remote = get_operator(operator_id)
+
+            if remote is not None:
+                if int(remote["active"]) != 1:
+                    return None
+
+                if not _verify_password(
+                    password,
+                    remote["password_salt"],
+                    remote["password_hash"],
+                ):
+                    return None
+
+                ensure_operator_keys(operator_id, password)
+                return remote
+        except Exception:
+            pass
+
     init_db()
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
-        row = conn.execute("SELECT * FROM operators WHERE operator_id=? AND active=1", (operator_id.strip(),)).fetchone()
-        if row is None or not _verify_password(password, row["password_salt"], row["password_hash"]):
+        row = conn.execute(
+            "SELECT * FROM operators WHERE operator_id=? AND active=1",
+            (operator_id,),
+        ).fetchone()
+
+        if row is None or not _verify_password(
+            password,
+            row["password_salt"],
+            row["password_hash"],
+        ):
             return None
+
         ensure_operator_keys(row["operator_id"], password)
         return dict(row)
     finally:
