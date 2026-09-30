@@ -9,3 +9,6 @@ keys/operators/*
 .streamlit/secrets.toml
 release/
 *.zip
+
+# Runtime-generated test evidence images
+images/TST-*.jpg
