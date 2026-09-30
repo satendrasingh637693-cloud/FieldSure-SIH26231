@@ -1,6 +1,12 @@
 from __future__ import annotations
 from supabase_client import get_supabase, supabase_enabled
 
+from supabase_repository import (
+    download_operator_private_key,
+    download_operator_public_key,
+    upload_operator_keys,
+)
+
 import base64
 import hashlib
 import hmac
@@ -182,46 +188,85 @@ def _verify_password(password: str, salt_b64: str, digest_b64: str) -> bool:
 
 
 def ensure_keys() -> None:
-    """Legacy single-key compatibility for records created before V5."""
+    """Ensure the legacy signing key exists locally and persist it remotely when enabled."""
     if PRIVATE_KEY_PATH.exists() and PUBLIC_KEY_PATH.exists():
         return
+
+    if supabase_enabled():
+        try:
+            PRIVATE_KEY_PATH.write_bytes(
+                download_operator_private_key("LEGACY")
+            )
+            PUBLIC_KEY_PATH.write_bytes(
+                download_operator_public_key("LEGACY")
+            )
+            return
+        except Exception:
+            pass
+
     private = Ed25519PrivateKey.generate()
     public = private.public_key()
-    PRIVATE_KEY_PATH.write_bytes(
-        private.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
-        )
+
+    private_bytes = private.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
     )
-    PUBLIC_KEY_PATH.write_bytes(
-        public.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
+    public_bytes = public.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
+
+    PRIVATE_KEY_PATH.write_bytes(private_bytes)
+    PUBLIC_KEY_PATH.write_bytes(public_bytes)
+
+    if supabase_enabled():
+        upload_operator_keys("LEGACY", private_bytes, public_bytes)
 
 
 def ensure_operator_keys(operator_id: str, password: str) -> None:
     private_path = operator_private_path(operator_id)
     public_path = operator_public_path(operator_id)
+
     if private_path.exists() and public_path.exists():
         return
+
+    if supabase_enabled():
+        try:
+            private_path.write_bytes(
+                download_operator_private_key(operator_id)
+            )
+            public_path.write_bytes(
+                download_operator_public_key(operator_id)
+            )
+            return
+        except Exception:
+            pass
+
     private = Ed25519PrivateKey.generate()
     public = private.public_key()
-    private_path.write_bytes(
-        private.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.BestAvailableEncryption(password.encode()),
-        )
+
+    private_bytes = private.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.BestAvailableEncryption(
+            password.encode()
+        ),
     )
-    public_path.write_bytes(
-        public.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
+    public_bytes = public.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
+
+    private_path.write_bytes(private_bytes)
+    public_path.write_bytes(public_bytes)
+
+    if supabase_enabled():
+        upload_operator_keys(
+            operator_id,
+            private_bytes,
+            public_bytes,
+        )
 
 
 def load_private_key(operator_id: str = "LEGACY", password: Optional[str] = None) -> Ed25519PrivateKey:
